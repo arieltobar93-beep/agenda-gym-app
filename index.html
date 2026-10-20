@@ -351,12 +351,13 @@ function render(){
   const cb=document.querySelector('[data-tab="cobros"]');cb.innerHTML='Cobros'+(debtors?`<span class="badge">${debtors}</span>`:'');
   const sync=document.getElementById('sync');
   document.querySelector('.gear').hidden=mode==='login';
-  if(mode==='db'||mode==='cloud')sync.textContent=mode==='cloud'?'Guardado en tu cuenta':'Guardado en la nube';else if(mode==='login')sync.textContent='';else if(mode==='local')sync.textContent=window.claude?'Modo prueba':'Guardado en este teléfono';
+  if(mode==='db'||mode==='cloud')sync.textContent=mode==='cloud'?(sub.tipo==='prueba'?'Prueba gratis: '+sub.dias+(sub.dias==1?' día':' días'):'Guardado en tu cuenta'):'Guardado en la nube';else if(mode==='login')sync.textContent='';else if(mode==='local')sync.textContent=window.claude?'Modo prueba':'Guardado en este teléfono';
   const fab=document.getElementById('fab');
   fab.textContent=ui.tab==='alumnos'?'+ Alumno':ui.tab==='cobros'?'+ Pago':ui.tab==='finanzas'?'+ Gasto':'+ Clase';
   const v=document.getElementById('view');
   const navT=document.querySelector('nav.tabs');
   if(mode==='login'){v.innerHTML=vLogin();fab.hidden=true;navT.hidden=true;return}
+  if(mode==='blocked'){v.innerHTML=vBlocked();fab.hidden=true;navT.hidden=true;return}
   navT.hidden=false;fab.hidden=false;
   if(mode==='loading'||(mode==='db'&&!Object.values(loaded).every(Boolean))){v.innerHTML='<div class="empty">Cargando agenda…</div>';return}
   v.innerHTML=ui.tab==='agenda'?vAgenda():ui.tab==='cobros'?vCobros():ui.tab==='finanzas'?vFinanzas():vAlumnos();
@@ -620,6 +621,7 @@ function sheetPago(alumnoId){
 /* ---------- cuenta en la nube (versión instalable con Supabase) ---------- */
 const APP_ID=(window.APP_CONFIG&&window.APP_CONFIG.app)||'agenda';
 const cloud={sb:null,user:null};
+let sub={activo:true,tipo:'',dias:0};
 const val=id=>(document.getElementById(id)||{}).value||'';
 async function initCloud(){
   const C=window.APP_CONFIG;
@@ -637,6 +639,9 @@ async function loadCloud(user){
   if(cloud.user&&cloud.user.id===user.id&&mode!=='login')return;
   cloud.user=user;mode='loading';render();
   try{if(/[?&](code|error)=/.test(location.search))history.replaceState(null,'',location.pathname)}catch(_){}
+  const {data:st,error:se}=await cloud.sb.rpc('estado_suscripcion',{p_app:APP_ID});
+  if(se||!st){cloud.user=null;mode='login';render();loginMsg('No se pudo verificar tu suscripción: '+(se?se.message:'sin respuesta'));return}
+  sub=st;
   const rows=[];
   for(let from=0;;from+=1000){
     const {data,error}=await cloud.sb.from('registros').select('coleccion,data').eq('app',APP_ID).range(from,from+999);
@@ -645,7 +650,14 @@ async function loadCloud(user){
   }
   for(const k of Object.keys(S))S[k]=[];
   for(const r of rows){if(S[r.coleccion])S[r.coleccion].push(r.data)}
-  mode='cloud';render();afterLoad();
+  mode=sub.activo?'cloud':'blocked';render();if(sub.activo)afterLoad();
+}
+function vBlocked(){
+  const C=window.APP_CONFIG||{};
+  const pay=C.payUrl?`<a class="btn primary" href="${C.payUrl}" target="_blank" rel="noopener" style="text-decoration:none;display:block;text-align:center">Activar mi cuenta</a>`:`<p class="note">Para activar tu cuenta escribe a ${C.contacto||'quien te entregó la app'}.</p>`;
+  return `<div class="login"><h2>Terminó tu prueba gratis</h2><p class="muted">Tus 7 días de prueba terminaron. Tus alumnos, clases y cobros siguen guardados y seguros en tu cuenta. Para seguir usando la agenda, activa tu suscripción.</p>${pay}
+  <button class="btn" data-act="sub-refresh" style="margin-top:10px">Ya pagué, actualizar</button>
+  <button class="linkish" data-act="logout" style="margin-top:10px;font-size:13.5px">Cerrar sesión</button></div>`;
 }
 function vLogin(){
   return `<div class="login"><h2>Entra a tu agenda</h2><p class="muted">Tus alumnos, clases y cobros quedan guardados en tu cuenta y los ves desde cualquier teléfono.</p>
@@ -857,6 +869,7 @@ document.addEventListener('click',async e=>{
       if(error)loginMsg(errEs(error));else if(!data.session)loginMsg('Te enviamos un correo para confirmar tu cuenta. Ábrelo y vuelve a entrar.');break}
     case 'login-forgot':{const em=val('l-email').trim();if(!em){loginMsg('Escribe tu correo arriba y vuelve a tocar "Olvidé mi contraseña".');break}
       const {error}=await cloud.sb.auth.resetPasswordForEmail(em,{redirectTo:location.origin+location.pathname});loginMsg(error?errEs(error):'Si ese correo tiene cuenta, te llegará un enlace para crear una contraseña nueva.');break}
+    case 'sub-refresh':{const u=cloud.user;if(u){cloud.user=null;await loadCloud(u)}break}
     case 'logout':{closeSheet();await cloud.sb.auth.signOut();break}
     case 'backup':{const blob=new Blob([JSON.stringify({app:'agenda-gym',v:1,fecha:today(),...S},null,1)],{type:'application/json'});const u=URL.createObjectURL(blob);const a=document.createElement('a');a.href=u;a.download='agenda-gym-respaldo-'+today()+'.json';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),2000);toast('Respaldo descargado');break}
     case 'del-local':{if(ui.armed!=='reset'){ui.armed='reset';b.textContent='Toca otra vez: se borra todo';b.classList.add('armed');return}
